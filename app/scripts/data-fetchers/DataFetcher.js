@@ -92,6 +92,10 @@ export default class DataFetcher {
    */
   constructor(dataConfig, pubSub, tileSource) {
     this._tileSource = tileSource || createDefaultTileSource(pubSub);
+    /** @type {((ids: string[]) => void) | undefined} Optional viewport ownership hook. */
+    this.setVisibleTiles = undefined;
+    /** @type {(() => void) | undefined} Optional request cleanup hook. */
+    this.dispose = undefined;
     /** @type {boolean} */
     this.tilesetInfoLoading = true;
 
@@ -266,14 +270,14 @@ export default class DataFetcher {
       });
       return /** @type {Promise<Record<string, Tile>>} */ (promise).then(
         (returnedTiles) => {
-          const tilesetUid = this.dataConfig.tilesetUid;
+          const tilesetUid = /** @type {string} */ (this.dataConfig.tilesetUid);
           /** @type {Record<string, Tile>} */
           const newTiles = {};
 
           for (let i = 0; i < tileIds.length; i++) {
             const fullTileId = this.fullTileId(tilesetUid, tileIds[i]);
 
-            if (!returnedTiles[fullTileId] || returnedTiles[fullTileId].error) continue;
+            if (!returnedTiles[fullTileId] || ('error' in returnedTiles[fullTileId] && returnedTiles[fullTileId].error)) continue;
             returnedTiles[fullTileId].tilePositionId = tileIds[i];
             newTiles[tileIds[i]] = returnedTiles[fullTileId];
           }

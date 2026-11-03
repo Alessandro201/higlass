@@ -837,27 +837,28 @@ class TiledPixiTrack extends PixiTrack {
 
       const token = {};
       for (const id of toFetchList) this._tileRequests.set(id, token);
-      let finished = false;
       /** @type {Promise<unknown> | void} */
       let result;
       /**
        * Release missing/failed tiles without clearing a newer request's state.
+       * @param {string[]} ids
        * @param {any} [error]
        */
-      const finish = (error) => {
-        if (finished || this._removed) return;
-        finished = true;
+      const release = (ids, error) => {
+        if (this._removed) return;
         let retry = false;
-        for (const id of toFetchList) {
+        const failed = [];
+        for (const id of ids) {
           if (this._tileRequests.get(id) !== token) continue;
           this._tileRequests.delete(id);
           this.fetching.delete(id);
+          failed.push(id);
           const failures = (this._tileFailures.get(id) ?? 0) + 1;
           this._tileFailures.set(id, failures);
           retry ||= failures < 3;
         }
-        if (error && error.name !== 'AbortError') {
-          console.warn('Tile request failed', toFetchList, error);
+        if (failed.length && error?.name !== 'AbortError') {
+          console.warn('Tile request failed', failed, error ?? 'Missing tile response');
         }
         if (retry && !this._retryTimer) {
           this._retryTimer = setTimeout(() => {
@@ -872,8 +873,11 @@ class TiledPixiTrack extends PixiTrack {
           /** @type {Record<string, any>} */
           const accepted = {};
           for (const id of toFetchList) {
-            if (this._tileRequests.get(id) !== token || !tiles?.[id]
-              || tiles[id].error) continue;
+            if (this._tileRequests.get(id) !== token || !tiles?.[id]) continue;
+            if ('error' in tiles[id] && tiles[id].error) {
+              release([id], tiles[id].error);
+              continue;
+            }
             this._tileRequests.delete(id);
             this.fetching.delete(id);
             this._tileFailures.delete(id);
@@ -881,11 +885,14 @@ class TiledPixiTrack extends PixiTrack {
           }
           if (Object.keys(accepted).length) this.receivedTiles(accepted);
           // Callback-only plugins remain supported; promise-based sources may stream.
-          queueMicrotask(() => { if (!result?.then) finish(); });
+          queueMicrotask(() => { if (typeof result?.then !== 'function') release(toFetchList); });
         }, toFetchList);
-        if (result?.then) Promise.resolve(result).then(() => finish(), finish);
+        if (typeof result?.then === 'function') {
+          Promise.resolve(result).then(() => release(toFetchList),
+            (error) => release(toFetchList, error));
+        }
       } catch (error) {
-        finish(error);
+        release(toFetchList, error);
       }
     }
   }
