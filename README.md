@@ -1,9 +1,15 @@
+### Fork notes
+This fork mainly fixes slow tile loading when displaying heavy `.mcool` files of very fine-grained resolution. It works in conjunction with my fork of [higlass-python](https://github.com/Alessandro201/higlass-python) which I also updated.
+> [!WARNING]
+> The fix was done entirely by ChatGPT and is intended for my local use. I did not personally check it, and this is why I did not open a pull request. However, I did briefly compare it with the upstream version and the plots are the same, but the tiles are loaded quicker. 
+>
+> Use it at your own discretion, I do not assume any responsibility.
+
 ![Build Status](https://github.com/higlass/higlass/actions/workflows/ci.yml/badge.svg)
 [![Live Docs](https://img.shields.io/badge/docs-live-red.svg?colorB=0f9256)](https://docs.higlass.io/)
 [![DOI](https://zenodo.org/badge/56026057.svg)](https://zenodo.org/badge/latestdoi/56026057)
 [![Twitter](https://img.shields.io/badge/news-twitter-red.svg?colorB=6930bf)](https://twitter.com/higlass_io)
 [![Slack](https://img.shields.io/badge/join-Slack-red.svg?colorB=ff4000)](https://tinyurl.com/3z3bds4w)
-
 
 ### Introduction
 
