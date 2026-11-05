@@ -455,7 +455,7 @@ export default class DataFetcher {
       // we need to extract the row corresponding to the data we need
 
       const tilesetUid = dictValues(returnedTiles)[0].tilesetUid;
-      // console.log('tilesetUid:', tilesetUid);
+
       /** @type {Record<string, Tile>} */
       const newTiles = {};
 
@@ -491,6 +491,7 @@ export default class DataFetcher {
             sliceIndex,
             1,
           );
+
           for (let j = 0; j < dataSlice.length; j++) {
             dataSlice[j] += mirroredDataSlice[j];
           }

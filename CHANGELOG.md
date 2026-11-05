@@ -1,5 +1,31 @@
 # Release notes
 
+## 2.3.5
+
+- Fix crash in `BedLikeTrack` when `colorEncoding` is `itemRgb` and a BED field contains a gene name with commas, which was mistakenly interpreted as an RGB value
+
+## 2.3.4
+
+- Externalize JSX runtime to ensure compatibility with React 19
+
+## 2.3.3
+
+- Fix value-scale zoom (`zoomedY`) not firing with a mouse wheel by checking the shift key on the current source event and falling back to `deltaX` when `deltaY` is zero
+
+## 2.3.2
+
+- Fix horizontal cross sections on tilesets with resolutions
+
+## 2.3.1
+
+- Fix two identical gene annotation tracks showing "multiple annotation tracks"
+- Fix chromsizes present yet showing "no chromsizes present"
+
+## 2.3.0
+
+- Added support for React 19.
+- Fixed bug where using a dataset as a divisor for a value scale locked track fails
+
 ## 2.2.3
 
 - Fix CSS type export for resolution by esm.sh
