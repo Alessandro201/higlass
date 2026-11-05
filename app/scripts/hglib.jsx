@@ -31,6 +31,9 @@ if (
 
 export { CSS };
 
+/** Notebook request lifecycle hooks supported by this build. */
+export const NOTEBOOK_TILE_PROTOCOL = 1;
+
 export { default as ChromosomeInfo } from './ChromosomeInfo';
 export { default as HiGlassComponent } from './HiGlassComponent';
 export {

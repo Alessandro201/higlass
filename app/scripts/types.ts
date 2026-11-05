@@ -201,6 +201,10 @@ export type HandleTilesetInfoFinished = (
 ) => void;
 
 export interface AbstractDataFetcher<TileType, DataConfig> {
+  /** Update request ownership when the track viewport changes. */
+  setVisibleTiles?(tileIds: string[]): void;
+  /** Release this track's pending requests. */
+  dispose?(): void;
   tilesetInfo(
     callback?: HandleTilesetInfoFinished,
   ): Promise<TilesetInfo | undefined>;
@@ -240,3 +244,8 @@ export type TileSource<T> = {
   ) => Promise<Record<string, TilesetInfo>>;
   registerTileset: (request: RegisterTilesetRequest) => Promise<Response>;
 };
+
+/** Enable bounded notebook tile and viewport timing logs. */
+declare global {
+  var HIGLASS_TILE_DEBUG: boolean | undefined;
+}

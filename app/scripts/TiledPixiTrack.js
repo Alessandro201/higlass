@@ -166,6 +166,20 @@ class TiledPixiTrack extends PixiTrack {
 
     // the tiles we already have requests out for
     this.fetching = new Set();
+    /** @type {Map<string, object>} */
+    this._tileRequests = new Map();
+    /** @type {Map<string, number>} */
+    this._tileFailures = new Map();
+    /** @type {Map<string, number>} */
+    this._tileRetainedAt = new Map();
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    this._retentionTimer = null;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    this._retryTimer = null;
+    this._removed = false;
+    this._viewportKey = '';
+    this._viewportStarted = 0;
+    this._visibleRenderFrame = 0;
     /** @type {Scale} */
     this.scale = {};
 
@@ -469,12 +483,29 @@ class TiledPixiTrack extends PixiTrack {
   }
 
   refreshTiles() {
-    if (!this.tilesetInfo) {
+    if (this._removed || !this.tilesetInfo) {
       return;
     }
 
     // @ts-expect-error Classes which extend TiledPixiTrack have this
     this.calculateVisibleTiles();
+
+    const visibleIds = this.visibleTiles.map((tile) => tile.remoteId);
+    const viewportKey = [...new Set(visibleIds)].sort().join('|');
+    if (viewportKey !== this._viewportKey) {
+      this._viewportKey = viewportKey;
+      this._viewportStarted = performance.now();
+      this._tileFailures.clear();
+    }
+    for (const id of this.visibleTileIds) this._tileRetainedAt.delete(id);
+    this.dataFetcher.setVisibleTiles?.(visibleIds);
+    const visible = new Set(visibleIds);
+    for (const id of this._tileRequests.keys()) {
+      if (!visible.has(id)) {
+        this._tileRequests.delete(id);
+        this.fetching.delete(id);
+      }
+    }
 
     // tiles that are fetched
     const fetchedTileIDs = new Set(Object.keys(this.fetchedTiles));
@@ -482,7 +513,8 @@ class TiledPixiTrack extends PixiTrack {
     // fetch the tiles that should be visible but haven't been fetched
     // and aren't in the process of being fetched
     const toFetch = [...this.visibleTiles].filter(
-      (x) => !this.fetching.has(x.remoteId) && !fetchedTileIDs.has(x.tileId),
+      (x) => !this.fetching.has(x.remoteId) && !fetchedTileIDs.has(x.tileId)
+        && (this._tileFailures.get(x.remoteId) ?? 0) < 3,
     );
 
     for (let i = 0; i < toFetch.length; i++) {
@@ -530,13 +562,29 @@ class TiledPixiTrack extends PixiTrack {
     // if there's nothing to remove, don't bother doing anything
     if (
       !toRemoveIds.length ||
-      !this.areAllVisibleTilesLoaded() ||
       this.renderingTiles.size
     ) {
       return;
     }
 
-    toRemoveIds.forEach((x) => {
+    const now = performance.now();
+    const allLoaded = this.areAllVisibleTilesLoaded();
+    for (const id of toRemoveIds) {
+      if (!this._tileRetainedAt.has(id)) this._tileRetainedAt.set(id, now);
+    }
+    // Keep coarse coverage briefly during refinement, even when a new tile fails.
+    const expired = toRemoveIds.filter((id) =>
+      allLoaded || now - (this._tileRetainedAt.get(id) ?? now) >= 5000);
+    if (expired.length < toRemoveIds.length && !this._retentionTimer) {
+      this._retentionTimer = setTimeout(() => {
+        this._retentionTimer = null;
+        if (!this._removed) this.removeOldTiles();
+      }, 5100);
+    }
+    if (!expired.length) return;
+
+    expired.forEach((x) => {
+      this._tileRetainedAt.delete(x);
       const tileIdStr = x;
       this.destroyTile(this.fetchedTiles[tileIdStr]);
 
@@ -767,6 +815,18 @@ class TiledPixiTrack extends PixiTrack {
     return loadedTileData;
   }
 
+  /** Dispose request ownership before removing the track graphics. */
+  remove() {
+    this._removed = true;
+    cancelAnimationFrame(this._visibleRenderFrame);
+    if (this._retryTimer) clearTimeout(this._retryTimer);
+    if (this._retentionTimer) clearTimeout(this._retentionTimer);
+    this.dataFetcher.dispose?.();
+    this._tileRequests.clear();
+    this.fetching.clear();
+    super.remove();
+  }
+
   /** @param {Pick<Tile,'remoteId'>[]} toFetch */
   fetchNewTiles(toFetch) {
     this._checkForErrors();
@@ -775,10 +835,65 @@ class TiledPixiTrack extends PixiTrack {
     if (toFetch.length > 0) {
       const toFetchList = [...new Set(toFetch.map((x) => x.remoteId))];
 
-      this.dataFetcher.fetchTilesDebounced(
-        this.receivedTiles.bind(this),
-        toFetchList,
-      );
+      const token = {};
+      for (const id of toFetchList) this._tileRequests.set(id, token);
+      /** @type {Promise<unknown> | void} */
+      let result;
+      /**
+       * Release missing/failed tiles without clearing a newer request's state.
+       * @param {string[]} ids
+       * @param {any} [error]
+       */
+      const release = (ids, error) => {
+        if (this._removed) return;
+        let retry = false;
+        const failed = [];
+        for (const id of ids) {
+          if (this._tileRequests.get(id) !== token) continue;
+          this._tileRequests.delete(id);
+          this.fetching.delete(id);
+          failed.push(id);
+          const failures = (this._tileFailures.get(id) ?? 0) + 1;
+          this._tileFailures.set(id, failures);
+          retry ||= failures < 3;
+        }
+        if (failed.length && error?.name !== 'AbortError') {
+          console.warn('Tile request failed', failed, error ?? 'Missing tile response');
+        }
+        if (retry && !this._retryTimer) {
+          this._retryTimer = setTimeout(() => {
+            this._retryTimer = null;
+            this.refreshTiles();
+          }, 250);
+        }
+      };
+      try {
+        result = this.dataFetcher.fetchTilesDebounced((tiles) => {
+          if (this._removed) return;
+          /** @type {Record<string, any>} */
+          const accepted = {};
+          for (const id of toFetchList) {
+            if (this._tileRequests.get(id) !== token || !tiles?.[id]) continue;
+            if ('error' in tiles[id] && tiles[id].error) {
+              release([id], tiles[id].error);
+              continue;
+            }
+            this._tileRequests.delete(id);
+            this.fetching.delete(id);
+            this._tileFailures.delete(id);
+            accepted[id] = tiles[id];
+          }
+          if (Object.keys(accepted).length) this.receivedTiles(accepted);
+          // Callback-only plugins remain supported; promise-based sources may stream.
+          queueMicrotask(() => { if (typeof result?.then !== 'function') release(toFetchList); });
+        }, toFetchList);
+        if (typeof result?.then === 'function') {
+          Promise.resolve(result).then(() => release(toFetchList),
+            (error) => release(toFetchList, error));
+        }
+      } catch (error) {
+        release(toFetchList, error);
+      }
     }
   }
 
@@ -838,7 +953,7 @@ class TiledPixiTrack extends PixiTrack {
       if (loadedTiles[key]) {
         const tileId = loadedTiles[key].tilePositionId;
 
-        if (this.fetching.has(tileId)) {
+        if (!this._tileRequests.has(tileId) && this.fetching.has(tileId)) {
           this.fetching.delete(tileId);
         }
       }
@@ -879,6 +994,25 @@ class TiledPixiTrack extends PixiTrack {
     // 2. If `true` then send out event
     if (this.areAllVisibleTilesLoaded()) {
       this.pubSub?.publish('TiledPixiTrack.tilesLoaded', { uuid: this.uuid });
+      if (globalThis.HIGLASS_TILE_DEBUG) {
+        const viewport = this._viewportKey;
+        cancelAnimationFrame(this._visibleRenderFrame);
+        /** Wait for asynchronous tile graphics and the following render frame. */
+        const rendered = () => {
+          if (this._removed || viewport !== this._viewportKey) return;
+          if (this.renderingTiles.size) {
+            this._visibleRenderFrame = requestAnimationFrame(rendered);
+            return;
+          }
+          this._visibleRenderFrame = requestAnimationFrame(() => {
+            if (!this._removed && viewport === this._viewportKey) {
+              console.debug('higlass.viewport', { uuid: this.uuid, viewport,
+                visible_render_frame_ms: performance.now() - this._viewportStarted });
+            }
+          });
+        };
+        this._visibleRenderFrame = requestAnimationFrame(rendered);
+      }
     }
   }
 
